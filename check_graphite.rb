@@ -19,9 +19,19 @@ optparse = OptionParser.new do |opts|
     options[:graphite_url] = u
   end
 
-  opts.on('-t', '--targets [TARGET1,TARGET2]', Array,
-          'Show metrics for TARGET1, TARGET2') do |t|
-    options[:targets] = t
+  opts.on('-u', '--auth-user [USER]',
+          "Set username for http basic-auth to USER") do |u|
+    options[:auth_user] = u
+  end
+
+  opts.on('-p', '--auth-password [PASSWORD]',
+          "Set password for http basic-auth to PASSWORD") do |p|
+    options[:auth_password] = p
+  end
+
+  opts.on('-t', '--targets [TARGET1|TARGET2]', 
+          'Show metrics for TARGET1|TARGET2 (use | to separate multiple targets') do |t|
+    options[:targets] = t.split('|')
   end
 
   opts.on('--from TIME', 'Set start time to TIME') do |t|
@@ -90,6 +100,18 @@ begin
     puts optparse
     exit
   end
+
+  if options[:auth_user] == true and options[:auth_password] == false
+    puts "--auth-user specified but --auth-password missing"
+    puts optparse
+    exit
+  end
+
+  if options[:auth_password] == true and options[:auth_user] == false
+    puts "--auth-password specified but --auth-user missing"
+    puts optparse
+    exit
+  end
 rescue OptionParser::InvalidOption, OptionParser::MissingArgument
   puts $!.to_s
   puts optparse
@@ -102,6 +124,8 @@ class GraphiteFetcher
     @targets = params[:targets].map {|t| "target=#{CGI::escape(t.to_s)}"}
     @from = CGI::escape(params[:from].to_s)
     @until = CGI::escape(params[:until].to_s)
+    @auth_user = params[:auth_user]
+    @auth_password = params[:auth_password]
   end
 
   def fetch_metrics
@@ -114,7 +138,12 @@ class GraphiteFetcher
 
     uri = URI.parse(full_url)
     $log.debug("Initiating HTTP request to url:#{full_url}")
-    res = Net::HTTP.get_response(uri)
+    res = []
+    Net::HTTP.start(uri.host) {|http|
+      req = Net::HTTP::Get.new(uri.path + '?' + uri.query)
+      req.basic_auth @auth_user, @auth_password if @auth_user and @auth_password
+      res = http.request(req)
+    }
 
     res.value
     res.body.chomp.split("\n").each do |line|
@@ -150,7 +179,10 @@ end
 gs = GraphiteFetcher.new(:graphite_url => options[:graphite_url],
                          :targets => options[:targets],
                          :from => options[:from],
-                         :until => options[:until])
+                         :until => options[:until],
+                         :auth_user => options[:auth_user],
+                         :auth_password => options[:auth_password]
+                        )
 
 if options[:over]
   block = Proc.new do |x, y|
@@ -195,3 +227,4 @@ if alerting.length > 0
 else
   puts "OK: No data point(s) alerting."
 end
+
